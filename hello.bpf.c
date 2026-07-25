@@ -1,18 +1,37 @@
 #include "vmlinux.h"
+#include <hello.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
 char LICENSE[] SEC("license") = "GPL";
 
+const volatile int my_pid = 0;
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 256 * 1024);
+} rb SEC(".maps");
+
 SEC("tp/syscalls/sys_enter_write")
 int hello(struct trace_event_raw_sys_enter *ctx)
 {
-    int fd = (int)ctx->args[0];
-    const char *ubuf = (const char *)ctx->args[1];
-    __u64 count = (__u64)ctx->args[2];
+	int pid = bpf_get_current_pid_tgid() >> 32;
 
-    char buf[64] = {};
-    bpf_probe_read_user_str(buf, sizeof(buf), ubuf);
-    bpf_printk("fd=%d count=%llu data=%s", fd, count, buf);
-    return 0;
+	if (pid == my_pid)
+		return 0;
+
+	struct event *e;
+	e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
+	if (!e)
+		return 0;
+
+	e->pid   = pid;                       
+	e->fd    = (int)ctx->args[0];
+	e->count = (unsigned long long)ctx->args[2];
+	bpf_get_current_comm(&e->comm, sizeof(e->comm));
+	bpf_probe_read_user_str(e->data, sizeof(e->data),
+				(const char *)ctx->args[1]);
+
+	bpf_ringbuf_submit(e, 0);
+	return 0;
 }

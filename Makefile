@@ -1,17 +1,28 @@
-CLANG ?= clang
-CC ?= gcc
-LIBBPF_CFLAGS := $(shell pkg-config --cflags libbpf)
-LIBBPF_LIBS := $(shell pkg-config --libs libbpf)
+CLANG   ?= clang
+BPFTOOL ?= bpftool
+ARCH    := $(shell uname -m | sed 's/x86_64/x86/; s/aarch64/arm64/; s/arm.*/arm/')
 
-all: hello.bpf.o hello
+CFLAGS  := -g -O2 -Wall
+LDLIBS  := -lbpf -lelf -lz   
 
-hello.bpf.o: hello.bpf.c
-	$(CLANG) -O2 -g -target bpf -c hello.bpf.c -o hello.bpf.o
-
-hello: hello.c
-	$(CC) -g -O2 $(LIBBPF_CFLAGS) -o hello hello.c $(LIBBPF_LIBS)
-
-clean:
-	rm -f hello.bpf.o hello
+APP := hello
 
 .PHONY: all clean
+
+all: $(APP)
+
+$(APP).bpf.o: $(APP).bpf.c hello.h vmlinux.h
+	$(CLANG) -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) \
+		-I. -c $(APP).bpf.c -o $@
+
+$(APP).skel.h: $(APP).bpf.o
+	$(BPFTOOL) gen skeleton $< > $@
+
+$(APP): $(APP).c $(APP).skel.h hello.h
+	$(CC) $(CFLAGS) -I. $(APP).c -o $@ $(LDLIBS)
+
+vmlinux.h:
+	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
+
+clean:
+	rm -f $(APP) $(APP).bpf.o $(APP).skel.h
