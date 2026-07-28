@@ -1,28 +1,18 @@
-CLANG   ?= clang
-BPFTOOL ?= bpftool
-ARCH    := $(shell uname -m | sed 's/x86_64/x86/; s/aarch64/arm64/; s/arm.*/arm/')
+ARCH := $(shell uname -m | sed 's/x86_64/x86/;s/aarch64/arm64/')
 
-CFLAGS  := -g -O2 -Wall
-LDLIBS  := -lbpf -lelf -lz   
-
-APP := hello
-
-.PHONY: all clean
-
-all: $(APP)
-
-$(APP).bpf.o: $(APP).bpf.c hello.h vmlinux.h
-	$(CLANG) -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) \
-		-I. -c $(APP).bpf.c -o $@
-
-$(APP).skel.h: $(APP).bpf.o
-	$(BPFTOOL) gen skeleton $< > $@
-
-$(APP): $(APP).c $(APP).skel.h hello.h
-	$(CC) $(CFLAGS) -I. $(APP).c -o $@ $(LDLIBS)
+all: loader
 
 vmlinux.h:
-	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
+	bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+
+guard.bpf.o: guard.bpf.c vmlinux.h
+	clang -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) -c guard.bpf.c -o $@
+
+guard.skel.h: guard.bpf.o
+	bpftool gen skeleton guard.bpf.o > guard.skel.h
+
+loader: loader.c guard.skel.h
+	$(CC) -g -O2 loader.c -lbpf -lelf -lz -o loader
 
 clean:
-	rm -f $(APP) $(APP).bpf.o $(APP).skel.h
+	rm -f loader *.o *.skel.h vmlinux.h
